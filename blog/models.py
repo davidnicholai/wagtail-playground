@@ -1,10 +1,14 @@
 from django.db import models
-from modelcluster.fields import ParentalKey
+from django.forms import CheckboxSelectMultiple
+from modelcluster.contrib.taggit import ClusterTaggableManager
+from modelcluster.fields import ParentalKey, ParentalManyToManyField
+from taggit.models import TaggedItemBase
 
 from wagtail.models import Page, Orderable
 from wagtail.fields import RichTextField
-from wagtail.admin.panels import FieldPanel, InlinePanel
+from wagtail.admin.panels import FieldPanel, InlinePanel, MultiFieldPanel
 from wagtail.search import index
+from wagtail.snippets.models import register_snippet
 
 
 class BlogIndexPage(Page):
@@ -18,10 +22,20 @@ class BlogIndexPage(Page):
         return context
 
 
+class BlogPageTag(TaggedItemBase):
+    content_object = ParentalKey(
+        'BlogPage',
+        related_name='tagged_items',
+        on_delete=models.CASCADE
+    )
+
+
 class BlogPage(Page):
     date = models.DateField("Post date")
     intro = models.CharField(max_length=250)
     body = RichTextField(blank=True)
+    tags = ClusterTaggableManager(through=BlogPageTag, blank=True)
+    categories = ParentalManyToManyField('blog.BlogCategory', blank=True)
 
     def main_image(self):
         gallery_item = self.gallery_images.first()
@@ -36,7 +50,11 @@ class BlogPage(Page):
     ]
 
     content_panels = Page.content_panels + [
-        FieldPanel('date'),
+        MultiFieldPanel([
+            FieldPanel('date'),
+            FieldPanel('tags'),
+            FieldPanel('categories', widget=CheckboxSelectMultiple),
+        ], heading="Blog information"),
         FieldPanel('intro'),
         FieldPanel('body', classname="full"),
         InlinePanel('gallery_images', label="Gallery images"),
@@ -54,3 +72,39 @@ class BlogPageGalleryImage(Orderable):
         FieldPanel('image'),
         FieldPanel('caption'),
     ]
+
+
+class BlogTagIndexPage(Page):
+    def get_context(self, request):
+        tag = request.GET.get('tag')
+        blogpages = BlogPage.objects.filter(tags__name=tag)
+
+        context = super().get_context(request)
+        context['blogpages'] = blogpages
+        return context
+
+
+@register_snippet
+class BlogCategory(models.Model):
+    name = models.CharField(max_length=255)
+    icon = models.ForeignKey(
+        'wagtailimages.Image', null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='+'
+    )
+
+    # Note that we are using panels rather than content_panels
+    # here - since snippets generally have no need for fields
+    # such as slug or publish date, the editing interface for
+    # them is not split into separate ‘content’ / ‘promote’ /
+    # ‘settings’ tabs as standard, and so there is no need to
+    # distinguish between ‘content panels’ and ‘promote panels’.
+    panels = [
+        FieldPanel('name'),
+        FieldPanel('icon'),
+    ]
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        verbose_name_plural = 'blog categories'
